@@ -8,38 +8,38 @@ Currently I have yet to upload it to PyPI, but before that, the only way is to d
 Parameters:
 
 ### Required
-- input_neurons (INT): The number of input neurons
-- output_neurons (INT): The number of output neurons
-- dense_layers (INT): The number of dense layers
-- dense_neurons (INT): The number of neurons per dense layer
+- `input_neurons` (INT): The number of input neurons
+- `output_neurons` (INT): The number of output neurons
+- `dense_layers` (INT): The number of dense layers
+- `dense_neurons` (INT): The number of neurons per dense layer
 
 ### Optional
-- dense_activation (STR): The activation function for dense layers. Defaults to ReLU. Valid Options: "relu", "sigmoid", "tanh". For any invalid option, the network will use none.
-- output_activation (STR): The activation function for the output layer. Defaults to Sigmoid. Valid Options: "relu", "sigmoid", "tanh", "round" (uses np.round()). For any invalid option, the network will use none.
-- weight_init (STR): The weight initialization method. Defaults to He. Valid Options: "he", "xavier", "rand, X" (will generate a uniform random number from -X to X), "const, X" (all weights initialized to X). For any invalid option, the network will initialize all weights to 0.
-- bias_init (FLOAT): The bias initialization float. Defaults to 0.0. All biases will be initialized to this value.
-- batchnorm (BOOL): Whether to use Batch Normalization or not. Defaults to False.
+- `dense_activation` (STR): The activation function for dense layers. Defaults to ReLU. Valid Options: `"relu"`, `"sigmoid"`, `"tanh"`. For any invalid option, the network will use none.
+- `output_activation` (STR): The activation function for the output layer. Defaults to Sigmoid. Valid Options: `"relu"`, `"sigmoid"`, `"tanh"`, "`round"` (uses np.round()). For any invalid option, the network will use none.
+- `weight_init` (STR): The weight initialization method. Defaults to He. Valid Options: `"he"`, `"xavier"`, `"rand, X"` (will generate a uniform random number from `-X` to `X`), `"const, X"` (all weights initialized to `X`). For any invalid option, the network will initialize all weights to `0`.
+- `bias_init` (FLOAT): The bias initialization float. Defaults to `0.0`. All biases will be initialized to this value.
+- `batchnorm` (BOOL): Whether to use Batch Normalization or not. Defaults to `False`.
 
 ### Returns
 Returns a list with all weight and bias matrices along with additional information about the network.
 
-## forward()
+## `forward()`
 Parameters:
 
 ### Required
-- network (LIST): The network, made with make_network()
-- inputs (NUMPY.ARRAY): The 1 row numpy array of inputs.
+- `network` (LIST): The network, made with `make_network()`
+- `inputs` (NUMPY.ARRAY): The 1 row numpy array of inputs.
 
 ### Returns
 Returns a numpy array of the output layer outputs
 
-## av()
+## `av()`
 Parameters:
 
 ### Required
-- x (LIST): A list of numbers
+- `x` (LIST): A list of numbers
 
 ### Returns
-A float which is the sum of x divided by len(x)
+A float which is the sum of x divided by `len(x)`
 
 # To be continued...
