@@ -14,7 +14,9 @@ from log import log as lg # pylint: disable=W
 import log
 
 # Suppress the log file missing warning
-log.lf_suppress = True
+#log.lf_suppress = True
+
+log.setup("/home/choc/Code/py/AI/testlog.log")
 
 lg('QuickTux Initialized', 1)
 
@@ -144,6 +146,9 @@ def forward(network, inputs):
     elif o_act == "tanh":
         def output_activation(layer):
             return np.tanh(layer)
+    elif o_act == "round":
+        def output_activation(layer):
+            return np.round(layer)
     else:
         def output_activation(layer):
             return layer
@@ -187,12 +192,22 @@ def mse(network, dataset, l1: float = 0.0, l2: float = 0.0):
     Returns: MSE of the network
     '''
     outputs = forward(network, dataset[0])
-    return av(av((dataset[1] - outputs)**2)) + (l1 * sum(np.sum(np.abs(w) for w in network[0]))) + (l2 * sum(np.sum(w**2) for w in network[0]))
-
+    weights = network[0]
+    sum_w = 0
+    for layer in weights:
+        for row in layer:
+            for weight in row:
+                sum_w += np.abs(weight)
+    w_sq = 0
+    for layer in weights:
+        for row in layer:
+            for weight in row:
+                w_sq += weight**2
+    return av(av((dataset[1] - outputs)**2)) + (l1 * sum_w) + (l2 * w_sq)
 
 def simulated_annealing(network, dataset, t0: float = 5.0, limit: float = 0.001,
                         alpha: float = None, a: float = None, b: float = None,
-                        k: int = 1, l1: float = 0.0, l2: float = 0.0):
+                        k: int = 1, l1: float = 0.0, l2: float = 0.0, z: int = 1):
     '''
     Simulated Annealing for optimizing the network
     Returns: optimized network
@@ -218,45 +233,149 @@ def simulated_annealing(network, dataset, t0: float = 5.0, limit: float = 0.001,
         # Change the weights in the input layer randomly
         for neuron in range(len(network[0][0])):
             for weight in range(len(network[0][0][neuron])):
+                pre_change = mse(network, dataset, l1, l2)
                 change = np.random.uniform(-(k*t), (k*t))
                 network[0][0][neuron][weight] += change
                 new_error = mse(network, dataset, l1, l2)
-                if new_error > initial_error:
-                    prob = np.e**-((initial_error - new_error) / t)
+                if new_error > pre_change:
+                    prob = np.e**-((pre_change - new_error) / t)
                     if np.random.uniform(0, 1) > prob:
-                        network[0][0][neuron][weight] -= change
+                        network[0][0][neuron][weight] -= z*change
 
         # Change the weights and biases in the hidden layers randomly
-        for layer in range(1, len(network[0])-1):
-            for neuron in range(len(network[0][layer])):
-                for weight in range(len(network[0][layer][neuron])):
+        for layer in range(1, network[5][2]):
+            current_layer = network[0][layer]
+            for row in range(len(current_layer)):
+                for weight in range(row):
+                    pre_change = mse(network, dataset, l1, l2)
                     change = np.random.uniform(-(k*t), (k*t))
-                    network[0][layer][neuron][weight] += change
+                    network[0][layer][row][weight] += change
                     new_error = mse(network, dataset, l1, l2)
-                    if new_error > initial_error:
-                        prob = np.e**-((initial_error - new_error) / t)
+                    if new_error > pre_change:
+                        prob = np.e**-((pre_change - new_error) / t)
                         if np.random.uniform(0, 1) > prob:
-                            network[0][layer][neuron][weight] -= change
+                            network[0][layer][row][weight] -= z*change
+            for neuron in range(network[5][3]-1):
+                pre_change = mse(network, dataset, l1, l2)
                 change = np.random.uniform(-(k*t), (k*t))
-                network[1][layer][neuron] += change
+                network[1][layer][0][neuron] += change
                 new_error = mse(network, dataset, l1, l2)
-                if new_error > initial_error:
-                    prob = np.e**-((initial_error - new_error) / t)
+                if new_error > pre_change:
+                    prob = np.e**-((pre_change - new_error) / t)
                     if np.random.uniform(0, 1) > prob:
-                        network[1][layer][neuron] -= change
+                        network[1][layer][neuron] -= z*change
+
         # Change the biases in the output layer randomly
         for neuron in range(network[5][1]):
+            pre_change = mse(network, dataset, l1, l2)
             change = np.random.uniform(-(k*t), (k*t))
             network[1][-1][neuron] += change
             new_error = mse(network, dataset, l1, l2)
-            if new_error > initial_error:
-                prob = np.e**-((initial_error - new_error) / t)
+            if new_error > pre_change:
+                prob = np.e**-((pre_change - new_error) / t)
                 if np.random.uniform(0, 1) > prob:
-                    network[1][-1][neuron] -= change
+                    network[1][-1][neuron] -= z*change
         t = decay(t0, t, cycle)
         after_error = mse(network, dataset, l1, l2)
-        lg(f"Cycle {cycle}: Error: {after_error}, Temperature: {t}")
+        lg(f"Cycle {cycle}: Error: {after_error}, Temperature: {t}", 0)
+        lg(f"Initial Error: {initial_error}, Final Error: {after_error}", 0)
     return network
+
+def train(network, dataset, lr=0.01, epochs=100):
+    inputs, targets = dataset[0], dataset[1]
+
+    for epoch in range(epochs):
+        # Forward pass
+        activations = [inputs]
+        pre_activations = []  # Store pre-activation values (Z)
+
+        # Forward propagation
+        for i in range(len(network[0])):
+            Z = np.dot(activations[-1], network[0][i]) + network[1][i]
+            pre_activations.append(Z)
+            activation = np.maximum(Z, 0) if network[2] == "relu" else 1 / (1 + np.exp(-Z))  # Example: ReLU/Sigmoid
+            activations.append(activation)
+
+        # Backward pass
+        delta = (activations[-1] - targets)  # Output layer error
+        for i in reversed(range(len(network[0]))):
+            weight_gradient = np.dot(activations[i].T, delta)
+            bias_gradient = np.sum(delta, axis=0, keepdims=True)
+
+            # Update weights and biases
+            network[0][i] -= lr * weight_gradient
+            network[1][i] -= lr * bias_gradient
+
+            # Compute delta for previous layer
+            if i > 0:
+                delta = np.dot(delta, network[0][i].T) * (pre_activations[i-1] > 0)  # ReLU derivative
+
+        # Compute loss (optional for logging)
+        loss = np.mean((activations[-1] - targets) ** 2)
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {loss}")
+        if loss < 1e-10:
+            lg("Loss is low enough, stopping training.", 2)
+            break
+
+    return network
+
+def adamw_train(network, dataset, lr=0.01, epochs=100, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.01):
+    """
+    Train the network using AdamW optimiser with backpropagation.
+    """
+    inputs, targets = dataset[0], dataset[1]
+
+    # Initialize momentum (m) and RMS (v) terms for each layer
+    m = [np.zeros_like(weights) for weights in network[0]]  # For weights
+    v = [np.zeros_like(weights) for weights in network[0]]
+    m_bias = [np.zeros_like(bias) for bias in network[1]]  # For biases
+    v_bias = [np.zeros_like(bias) for bias in network[1]]
+
+    for epoch in range(1, epochs + 1):
+        # Forward pass
+        activations = [inputs]
+        pre_activations = []
+
+        # Forward propagate
+        for i in range(len(network[0])):
+            Z = np.dot(activations[-1], network[0][i]) + network[1][i]
+            pre_activations.append(Z)
+            activation = np.maximum(Z, 0) if network[2] == "relu" else Z
+            activations.append(activation)
+
+        # Backward pass
+        delta = (activations[-1] - targets)  # Error at the output layer
+        for i in reversed(range(len(network[0]))):
+            # Compute gradients
+            weight_gradient = np.dot(activations[i].T, delta)
+            bias_gradient = np.sum(delta, axis=0, keepdims=True)
+
+            # Update momentum and RMS terms
+            m[i] = beta1 * m[i] + (1 - beta1) * weight_gradient
+            v[i] = beta2 * v[i] + (1 - beta2) * (weight_gradient**2)
+            m_bias[i] = beta1 * m_bias[i] + (1 - beta1) * bias_gradient
+            v_bias[i] = beta2 * v_bias[i] + (1 - beta2) * (bias_gradient**2)
+
+            # Bias-corrected momentum and RMS terms
+            m_hat = m[i] / (1 - beta1**epoch)
+            v_hat = v[i] / (1 - beta2**epoch)
+            m_hat_bias = m_bias[i] / (1 - beta1**epoch)
+            v_hat_bias = v_bias[i] / (1 - beta2**epoch)
+
+            # Update weights and biases with Adam update + weight decay
+            network[0][i] -= lr * (m_hat / (np.sqrt(v_hat) + epsilon) + weight_decay * network[0][i])
+            network[1][i] -= lr * (m_hat_bias / (np.sqrt(v_hat_bias) + epsilon))
+
+            # Backpropagate delta to the previous layer
+            if i > 0:
+                delta = np.dot(delta, network[0][i].T) * (pre_activations[i-1] > 0)  # ReLU derivative
+
+        # Compute loss (optional for logging)
+        loss = np.mean((activations[-1] - targets)**2)
+        print(f"Epoch {epoch}/{epochs}, Loss: {loss:.6f}")
+
+    return network
+
 
 def save_network(network, filename: str):
     '''
@@ -268,3 +387,11 @@ def save_network(network, filename: str):
     base = os.path.splitext(filename)[0]  # Get the file name without extension
     new_filename = f"{base}.tux"
     os.rename(filename, new_filename)
+
+def load_network(filename: str):
+    '''
+    Load the network from a file
+    '''
+    with open(filename, 'r', encoding='utf-8') as file:
+        data = file.read()
+    return data
