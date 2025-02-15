@@ -257,7 +257,7 @@ def train(network: List[Any],
         elif loss < old_loss:
             print(f"\rEpoch {epoch + 1}/{epochs} [{bar}] - {loss:.10f} Loss ▼", end='')
         else:
-            print(f"\rEpoch {epoch + 1}/{epochs} [{bar}] - {loss:.10f} Loss ✔️", end='')
+            print(f"\rEpoch {epoch + 1}/{epochs} [{bar}] - {loss:.10f} Loss ○", end='')
         old_loss = loss
         if epoch == epochs - 1:
             print()
