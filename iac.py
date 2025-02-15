@@ -244,11 +244,21 @@ def train(network: List[Any],
         ############################################################################
         # Update progress bar
         ############################################################################
+        try:
+            old_loss += 1
+        except:
+            old_loss = loss
         progress = (epoch + 1) / epochs
         bar_length = 50
         block = int(round(bar_length * progress))
         bar = '#' * block + ' ' * (bar_length - block)
-        print(f"\rEpoch {epoch + 1}/{epochs} [{bar}] - {loss} Loss", end='')
+        if loss > old_loss:
+            print(f"\rEpoch {epoch + 1}/{epochs} [{bar}] - {loss:.10f} Loss ▲", end='')
+        elif loss < old_loss:
+            print(f"\rEpoch {epoch + 1}/{epochs} [{bar}] - {loss:.10f} Loss ▼", end='')
+        else:
+            print(f"\rEpoch {epoch + 1}/{epochs} [{bar}] - {loss:.10f} Loss ✔️", end='')
+        old_loss = loss
         if epoch == epochs - 1:
             print()
 
