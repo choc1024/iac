@@ -1,397 +1,276 @@
-'''
-Import the necessary libraries
-'''
-
-# Import OS for file operations
 import os
-# Re: Regular expressions matching for function parameters
-import re
-# Numpy: Matrices, maths, etc
+import pickle
 import numpy as np
-# Log: Logging for the program (I made this lib btw)
-from log import log as lg # pylint: disable=W
-# Also import the log entirely
-import log
+from typing import List, Tuple, Any, Callable
 
-# Suppress the log file missing warning
-#log.lf_suppress = True
 
-log.setup("/home/choc/Code/py/AI/testlog.log")
+################################################################################
+# Utility Functions
+################################################################################
 
-lg('QuickTux Initialized', 1)
+def dense(*layers: Tuple[int, int]) -> List[int]:
+    """
+    Generate a list of dense layer sizes from tuples of (num_layers, neurons_per_layer).
+    Example: dense((2,64), (3,32)) -> [64, 64, 32, 32, 32]
+    """
+    return [neurons for num, neurons in layers for _ in range(num)]
 
-# A function that creates a neural network with the specified parameters
-def make_network(input_neurons: int, output_neurons: int, dense_layers: int,
-            dense_neurons: int, dense_activation: str = "relu",
-            output_activation: str = "linear",
-            weight_init: str = "he", bias_init: float = 0.0,
-            batchnorm: bool = False):
-    '''
-    Create a neural network with the specified parameters
 
-    Returns: list
-    '''
+def get_activation_fn(name: str) -> Callable[[np.ndarray], np.ndarray]:
+    """
+    Retrieve the activation function based on the provided name.
+    """
+    activations = {
+        "relu": lambda x: np.maximum(x, 0),
+        "sigmoid": lambda x: 1 / (1 + np.exp(-x)),
+        "tanh": np.tanh,
+        "leaky_relu": lambda x: np.maximum(0.01 * x, x),
+        "softmax": lambda x: np.exp(x) / np.sum(np.exp(x), axis=1, keepdims=True),
+        "linear": lambda x: x
+    }
+    return activations.get(name, lambda x: x)
 
-    # Define the weight initialization function that NumPy should use according
-    # to the weight_init parameter
 
-    ## He initialization
-    if weight_init == "he":
-        lg('Weight Initialization is He', 0)
-        def w_init():
-            return np.random.uniform(0, np.sqrt(2 / input_neurons))
-
-    ## Xavier initialization
-    elif weight_init == "xavier":
-        lg('Weight Initialization is Xavier', 0)
-        def w_init():
-            x = np.sqrt(6 / (input_neurons + output_neurons))
-            return np.random.uniform(-x, x)
-
-    ## Random initialization
-    elif re.match(r"rand, (-?\d+(\.\d+)?)", weight_init):
-        lg('Random Weight Initialization', 0)
-        match = re.match(r"rand, (-?\d+(\.\d+)?)", weight_init)
-        match_range = float(match.group(1))
-        def w_init():
-            return np.random.uniform(-match_range, match_range)
-
-    ## Constant initialization
-    elif re.match(r"const, (-?\d+(\.\d+)?)", weight_init):
-        lg('Constant Weight Initialization', 0)
-        match = re.match(r"const, (-?\d+(\.\d+)?)", weight_init)
-        match_const = float(match.group(1))
-        def w_init():
-            return match_const
-    ## No match, weights are initialized to 0
+def get_activation_derivative(name: str, activated: np.ndarray) -> np.ndarray:
+    """
+    Retrieve the derivative of the activation function with respect to its output.
+    """
+    if name == "relu":
+        return (activated > 0).astype(float)
+    elif name == "sigmoid":
+        return activated * (1.0 - activated)
+    elif name == "tanh":
+        return 1.0 - activated ** 2
+    elif name == "leaky_relu":
+        return np.where(activated > 0, 1.0, 0.01)
+    elif name == "linear":
+        return np.ones_like(activated)
     else:
-        lg('Weight Initialization Parameter Unrecognized, Zero Weight Initialization', 2)
-        def w_init():
-            return 0
-
-    net = []
-
-    # List of weight matrices
-    weights = []
-
-    # List of bias matrices
-    biases = []
-
-    # Weight matrix from input layer to first dense layer
-    weights.append(
-        np.array(
-            [[w_init() for _ in range(dense_neurons)]
-            for _ in range(input_neurons)]))
-    for _ in range(dense_layers-1):
-        # Weight matrices from dense layer to dense layer
-        weights.append(
-            np.array(
-                [[w_init() for _ in range(dense_neurons)]
-                for _ in range(dense_neurons)]))
-    # Weight matrix from last dense layer to output layer
-    weights.append(
-        np.array(
-            [[w_init() for _ in range(output_neurons)]
-            for _ in range(dense_neurons)]))
-    lg('Weight Matrices Created', 1)
-
-    # Bias matrices for each dense layer
-    for _ in range(dense_layers):
-        biases.append(np.full((1, dense_neurons), bias_init))
-
-    # Bias matrix for output layer
-    biases.append(np.full((1, output_neurons), bias_init))
-    lg('Bias Matrices Created', 1)
-
-    net.append(weights)
-    net.append(biases)
-    net.append(dense_activation)
-    net.append(output_activation)
-    net.append(batchnorm)
-
-    # Add some extra info to make my life easier in training functions
-    net.append([input_neurons, output_neurons, dense_layers, dense_neurons])
-    return net
-
-def forward(network, inputs):
-    '''
-    Forward propagate the inputs through the network
-    Returns: array of outputs
-    '''
-
-    h_act = network[2]
-    o_act = network[3]
-
-    # Define Hidden Activation Function
-    if h_act == "relu":
-        def hidden_activation(layer):
-            return np.maximum(layer, 0, layer)
-    elif h_act == "sigmoid":
-        def hidden_activation(layer):
-            return 1 / (1 + np.exp(-layer))
-    elif h_act == "tanh":
-        def hidden_activation(layer):
-            return np.tanh(layer)
-    else:
-        def hidden_activation(layer):
-            return layer
-
-    # Define Output Activation Function
-    if o_act == "relu":
-        def output_activation(layer):
-            return np.maximum(layer, 0, layer)
-    elif o_act == "sigmoid":
-        def output_activation(layer):
-            return 1 / (1 + np.exp(-layer))
-    elif o_act == "tanh":
-        def output_activation(layer):
-            return np.tanh(layer)
-    elif o_act == "round":
-        def output_activation(layer):
-            return np.round(layer)
-    else:
-        def output_activation(layer):
-            return layer
-
-    # If batchnorm is enabled, normalize the inputs
-    if network[4]:
-        def batchnorm(inputs):
-            return (inputs - np.mean(inputs)) / np.std(inputs)
-    else:
-        def batchnorm(inputs):
-            return inputs
-
-    weights = network[0]
-    biases = network[1]
-
-    # First layer
-    layer = np.dot(inputs, weights[0]) + biases[0]
-
-    # Hidden layers
-    for i in range(1, len(weights)-1):
-        layer = batchnorm(hidden_activation(np.dot(layer, weights[i]) + biases[i]))
-
-    # Output layer
-    return output_activation(np.dot(layer, weights[-1]) + biases[-1])
+        return np.ones_like(activated)
 
 
-#Format of the dataset:
-#[array([[input1, input2], [input1, input2], [input1, input2]]),
-# array([output1, output2, #output3], ...)]
+def batchnorm(inputs: np.ndarray, use_batchnorm: bool = True, epsilon: float = 1e-5) -> np.ndarray:
+    """
+    Apply batch normalization if enabled.
+    Uses per-batch statistics; note that for a production system, you'd typically
+    maintain running averages for inference.
+    """
+    if not use_batchnorm:
+        return inputs
+    batch_mean = np.mean(inputs, axis=0)
+    batch_var = np.var(inputs, axis=0)
+    return (inputs - batch_mean) / np.sqrt(batch_var + epsilon)
 
-def av(x): # I didn't bother to use the numpy average function
-    '''
-    Average function
-    Returns: average of x
-    '''
-    return sum(x) / len(x)
 
-def mse(network, dataset, l1: float = 0.0, l2: float = 0.0):
-    '''
-    Mean Squared Error function
-    Returns: MSE of the network
-    '''
-    outputs = forward(network, dataset[0])
-    weights = network[0]
-    sum_w = 0
-    for layer in weights:
-        for row in layer:
-            for weight in row:
-                sum_w += np.abs(weight)
-    w_sq = 0
-    for layer in weights:
-        for row in layer:
-            for weight in row:
-                w_sq += weight**2
-    return av(av((dataset[1] - outputs)**2)) + (l1 * sum_w) + (l2 * w_sq)
+def initialize_weights(shape: Tuple[int, int], method: str = "he") -> np.ndarray:
+    """
+    Initialize weights based on the selected method (He or Xavier).
+    """
+    if method == "he":
+        return np.random.randn(*shape) * np.sqrt(2.0 / shape[0])
+    elif method == "xavier":
+        return np.random.randn(*shape) * np.sqrt(1.0 / shape[0])
+    return np.random.randn(*shape)
 
-def simulated_annealing(network, dataset, t0: float = 5.0, limit: float = 0.001,
-                        alpha: float = None, a: float = None, b: float = None,
-                        k: int = 1, l1: float = 0.0, l2: float = 0.0, z: int = 1):
-    '''
-    Simulated Annealing for optimizing the network
-    Returns: optimized network
-    '''
-    if alpha is None and (a is None or b is None):
-        raise ValueError("A decay function must be specified")
-    elif alpha is not None and (a is not None or b is not None):
-        raise ValueError("Only one decay function can be specified")
-    elif alpha is not None and (a is None and b is None):
-        def decay(init_t, t, cycle): # pylint: disable=W
-            return t*alpha
-    elif alpha is None and (a is not None and b is not None):
-        def decay(init_t, t, cycle): # pylint: disable=W
-            return init_t / (1 + np.e**(a*(cycle-b)))
-    else:
-        raise ValueError("Invalid decay function")
 
-    t = t0
-    cycle = 0
-    while t > limit:
-        cycle += 1
-        initial_error = mse(network, dataset, l1, l2)
-        # Change the weights in the input layer randomly
-        for neuron in range(len(network[0][0])):
-            for weight in range(len(network[0][0][neuron])):
-                pre_change = mse(network, dataset, l1, l2)
-                change = np.random.uniform(-(k*t), (k*t))
-                network[0][0][neuron][weight] += change
-                new_error = mse(network, dataset, l1, l2)
-                if new_error > pre_change:
-                    prob = np.e**-((pre_change - new_error) / t)
-                    if np.random.uniform(0, 1) > prob:
-                        network[0][0][neuron][weight] -= z*change
+################################################################################
+# Network Creation and Forward Pass
+################################################################################
 
-        # Change the weights and biases in the hidden layers randomly
-        for layer in range(1, network[5][2]):
-            current_layer = network[0][layer]
-            for row in range(len(current_layer)):
-                for weight in range(row):
-                    pre_change = mse(network, dataset, l1, l2)
-                    change = np.random.uniform(-(k*t), (k*t))
-                    network[0][layer][row][weight] += change
-                    new_error = mse(network, dataset, l1, l2)
-                    if new_error > pre_change:
-                        prob = np.e**-((pre_change - new_error) / t)
-                        if np.random.uniform(0, 1) > prob:
-                            network[0][layer][row][weight] -= z*change
-            for neuron in range(network[5][3]-1):
-                pre_change = mse(network, dataset, l1, l2)
-                change = np.random.uniform(-(k*t), (k*t))
-                network[1][layer][0][neuron] += change
-                new_error = mse(network, dataset, l1, l2)
-                if new_error > pre_change:
-                    prob = np.e**-((pre_change - new_error) / t)
-                    if np.random.uniform(0, 1) > prob:
-                        network[1][layer][neuron] -= z*change
+def make_network(input_size: int,
+                 output_size: int,
+                 layers: List[int],
+                 hidden_activation: str = "relu",
+                 output_activation: str = "linear",
+                 use_batchnorm: bool = False,
+                 weight_init: str = "he",
+                 bias_init: float = 0.0) -> List[Any]:
+    """
+    Create a neural network with specified properties.
+    Returns [weights, biases, hidden_activation, output_activation, use_batchnorm].
+    """
+    # Initialize weights
+    weights = [initialize_weights((input_size, layers[0]), weight_init)]
+    for i in range(len(layers) - 1):
+        weights.append(initialize_weights((layers[i], layers[i + 1]), weight_init))
+    weights.append(initialize_weights((layers[-1], output_size), weight_init))
 
-        # Change the biases in the output layer randomly
-        for neuron in range(network[5][1]):
-            pre_change = mse(network, dataset, l1, l2)
-            change = np.random.uniform(-(k*t), (k*t))
-            network[1][-1][neuron] += change
-            new_error = mse(network, dataset, l1, l2)
-            if new_error > pre_change:
-                prob = np.e**-((pre_change - new_error) / t)
-                if np.random.uniform(0, 1) > prob:
-                    network[1][-1][neuron] -= z*change
-        t = decay(t0, t, cycle)
-        after_error = mse(network, dataset, l1, l2)
-        lg(f"Cycle {cycle}: Error: {after_error}, Temperature: {t}", 0)
-        lg(f"Initial Error: {initial_error}, Final Error: {after_error}", 0)
-    return network
+    # Initialize biases
+    biases = [np.full((1, l), bias_init) for l in layers]
+    biases.append(np.full((1, output_size), bias_init))
 
-def train(network, dataset, lr=0.01, epochs=100):
-    inputs, targets = dataset[0], dataset[1]
+    return [weights, biases, hidden_activation, output_activation, use_batchnorm]
+
+
+def forward(network: List[Any], inputs: np.ndarray) -> np.ndarray:
+    """
+    Perform a forward pass through the neural network.
+    """
+    weights, biases, hidden_activation, output_activation, use_batchnorm = network
+
+    hidden_activation_fn = get_activation_fn(hidden_activation)
+    output_activation_fn = get_activation_fn(output_activation)
+
+    for i in range(len(weights) - 1):
+        z = np.dot(inputs, weights[i]) + biases[i]
+        a = batchnorm(hidden_activation_fn(z), use_batchnorm)
+        inputs = a
+
+    z = np.dot(inputs, weights[-1]) + biases[-1]
+    outputs = output_activation_fn(z)
+    return outputs
+
+
+################################################################################
+# MSE Function (Network + Dataset)
+################################################################################
+
+def mse(network: List[Any], dataset: Tuple[np.ndarray, np.ndarray]) -> float:
+    """
+    Compute Mean Squared Error (MSE) for the given network and dataset.
+    Dataset format: (X, Y), where X is input data and Y is labels/target outputs.
+    """
+    X, Y = dataset
+    preds = forward(network, X)
+    return np.mean((preds - Y) ** 2)
+
+
+################################################################################
+# Training Function with SGD, Adam, AdamW, Batchnorm, L1 and L2 Regularization
+################################################################################
+
+def train(network: List[Any],
+          dataset: Tuple[np.ndarray, np.ndarray],
+          optimizer: str = "adamw",
+          lr: float = 0.001,
+          epochs: int = 1000,
+          beta1: float = 0.9,
+          beta2: float = 0.999,
+          epsilon: float = 1e-8,
+          weight_decay: float = 1e-2,
+          l1: float = 0.0,
+          l2: float = 0.0) -> List[Any]:
+    """
+    Train the neural network using backpropagation with options for:
+      - 'sgd'
+      - 'adam'
+      - 'adamw'
+
+    Additionally, this function now includes L1 and L2 regularization.
+    The loss printed includes the regularization penalty.
+    """
+    X, Y = dataset
+    weights, biases, hidden_activation, output_activation, use_batchnorm = network
+
+    # For Adam/AdamW, initialize moments for each weight and bias
+    m_w = [np.zeros_like(w) for w in weights]
+    v_w = [np.zeros_like(w) for w in weights]
+    m_b = [np.zeros_like(b) for b in biases]
+    v_b = [np.zeros_like(b) for b in biases]
+
+    hidden_activation_fn = get_activation_fn(hidden_activation)
+    output_activation_fn = get_activation_fn(output_activation)
 
     for epoch in range(epochs):
+        ############################################################################
         # Forward pass
-        activations = [inputs]
-        pre_activations = []  # Store pre-activation values (Z)
+        ############################################################################
+        z_values = []
+        a_values = [X]
 
-        # Forward propagation
-        for i in range(len(network[0])):
-            Z = np.dot(activations[-1], network[0][i]) + network[1][i]
-            pre_activations.append(Z)
-            activation = np.maximum(Z, 0) if network[2] == "relu" else 1 / (1 + np.exp(-Z))  # Example: ReLU/Sigmoid
-            activations.append(activation)
+        for i in range(len(weights) - 1):
+            z = np.dot(a_values[-1], weights[i]) + biases[i]
+            z_values.append(z)
+            a = batchnorm(hidden_activation_fn(z), use_batchnorm)
+            a_values.append(a)
 
+        z_out = np.dot(a_values[-1], weights[-1]) + biases[-1]
+        z_values.append(z_out)
+        y_pred = output_activation_fn(z_out)
+        a_values.append(y_pred)
+
+        ############################################################################
+        # Loss calculation (MSE + regularization penalties)
+        ############################################################################
+        mse_loss = np.mean((y_pred - Y) ** 2)
+        reg_loss = 0.0
+        for w in weights:
+            reg_loss += l1 * np.sum(np.abs(w)) + l2 * np.sum(w ** 2)
+        loss = mse_loss + reg_loss
+
+        ############################################################################
         # Backward pass
-        delta = (activations[-1] - targets)  # Output layer error
-        for i in reversed(range(len(network[0]))):
-            weight_gradient = np.dot(activations[i].T, delta)
-            bias_gradient = np.sum(delta, axis=0, keepdims=True)
+        ############################################################################
+        dA = (y_pred - Y) / Y.shape[0]
 
-            # Update weights and biases
-            network[0][i] -= lr * weight_gradient
-            network[1][i] -= lr * bias_gradient
+        for i in reversed(range(len(weights))):
+            # Select activation function derivative for output vs. hidden layers
+            act_name = output_activation if i == len(weights) - 1 else hidden_activation
+            dZ = dA * get_activation_derivative(act_name, a_values[i + 1])
+            grad_w = np.dot(a_values[i].T, dZ)
+            grad_b = np.sum(dZ, axis=0, keepdims=True)
 
-            # Compute delta for previous layer
+            # Add regularization derivatives to the weight gradients
+            grad_w += l1 * np.sign(weights[i]) + 2 * l2 * weights[i]
+
+            # Optimizer updates
+            if optimizer in ["adam", "adamw"]:
+                m_w[i] = beta1 * m_w[i] + (1 - beta1) * grad_w
+                v_w[i] = beta2 * v_w[i] + (1 - beta2) * (grad_w ** 2)
+
+                m_b[i] = beta1 * m_b[i] + (1 - beta1) * grad_b
+                v_b[i] = beta2 * v_b[i] + (1 - beta2) * (grad_b ** 2)
+
+                m_w_corr = m_w[i] / (1 - beta1 ** (epoch + 1))
+                v_w_corr = v_w[i] / (1 - beta2 ** (epoch + 1))
+                m_b_corr = m_b[i] / (1 - beta1 ** (epoch + 1))
+                v_b_corr = v_b[i] / (1 - beta2 ** (epoch + 1))
+
+                if optimizer == "adam":
+                    weights[i] -= lr * (m_w_corr / (np.sqrt(v_w_corr) + epsilon))
+                    biases[i] -= lr * (m_b_corr / (np.sqrt(v_b_corr) + epsilon))
+                else:  # AdamW
+                    weights[i] -= (lr * (m_w_corr / (np.sqrt(v_w_corr) + epsilon))
+                                   + lr * weight_decay * weights[i])
+                    biases[i] -= lr * (m_b_corr / (np.sqrt(v_b_corr) + epsilon))
+            else:
+                # Vanilla SGD update
+                weights[i] -= lr * grad_w
+                biases[i] -= lr * grad_b
+
             if i > 0:
-                delta = np.dot(delta, network[0][i].T) * (pre_activations[i-1] > 0)  # ReLU derivative
+                dA = np.dot(dZ, weights[i].T)
 
-        # Compute loss (optional for logging)
-        loss = np.mean((activations[-1] - targets) ** 2)
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {loss}")
-        if loss < 1e-10:
-            lg("Loss is low enough, stopping training.", 2)
-            break
-
-    return network
-
-def adamw_train(network, dataset, lr=0.01, epochs=100, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.01):
-    """
-    Train the network using AdamW optimiser with backpropagation.
-    """
-    inputs, targets = dataset[0], dataset[1]
-
-    # Initialize momentum (m) and RMS (v) terms for each layer
-    m = [np.zeros_like(weights) for weights in network[0]]  # For weights
-    v = [np.zeros_like(weights) for weights in network[0]]
-    m_bias = [np.zeros_like(bias) for bias in network[1]]  # For biases
-    v_bias = [np.zeros_like(bias) for bias in network[1]]
-
-    for epoch in range(1, epochs + 1):
-        # Forward pass
-        activations = [inputs]
-        pre_activations = []
-
-        # Forward propagate
-        for i in range(len(network[0])):
-            Z = np.dot(activations[-1], network[0][i]) + network[1][i]
-            pre_activations.append(Z)
-            activation = np.maximum(Z, 0) if network[2] == "relu" else Z
-            activations.append(activation)
-
-        # Backward pass
-        delta = (activations[-1] - targets)  # Error at the output layer
-        for i in reversed(range(len(network[0]))):
-            # Compute gradients
-            weight_gradient = np.dot(activations[i].T, delta)
-            bias_gradient = np.sum(delta, axis=0, keepdims=True)
-
-            # Update momentum and RMS terms
-            m[i] = beta1 * m[i] + (1 - beta1) * weight_gradient
-            v[i] = beta2 * v[i] + (1 - beta2) * (weight_gradient**2)
-            m_bias[i] = beta1 * m_bias[i] + (1 - beta1) * bias_gradient
-            v_bias[i] = beta2 * v_bias[i] + (1 - beta2) * (bias_gradient**2)
-
-            # Bias-corrected momentum and RMS terms
-            m_hat = m[i] / (1 - beta1**epoch)
-            v_hat = v[i] / (1 - beta2**epoch)
-            m_hat_bias = m_bias[i] / (1 - beta1**epoch)
-            v_hat_bias = v_bias[i] / (1 - beta2**epoch)
-
-            # Update weights and biases with Adam update + weight decay
-            network[0][i] -= lr * (m_hat / (np.sqrt(v_hat) + epsilon) + weight_decay * network[0][i])
-            network[1][i] -= lr * (m_hat_bias / (np.sqrt(v_hat_bias) + epsilon))
-
-            # Backpropagate delta to the previous layer
-            if i > 0:
-                delta = np.dot(delta, network[0][i].T) * (pre_activations[i-1] > 0)  # ReLU derivative
-
-        # Compute loss (optional for logging)
-        loss = np.mean((activations[-1] - targets)**2)
-        print(f"Epoch {epoch}/{epochs}, Loss: {loss:.6f}")
+        ############################################################################
+        # Update progress bar
+        ############################################################################
+        progress = (epoch + 1) / epochs
+        bar_length = 50
+        block = int(round(bar_length * progress))
+        bar = '#' * block + ' ' * (bar_length - block)
+        print(f"\rEpoch {epoch + 1}/{epochs} [{bar}] - {loss} Loss", end='')
+        if epoch == epochs - 1:
+            print()
 
     return network
 
 
-def save_network(network, filename: str):
-    '''
-    Save the network to a file
-    '''
-    with open(filename, 'w', encoding='utf-8') as file:
-        file.write(str(network))
-    # Change the file extension to .tux
-    base = os.path.splitext(filename)[0]  # Get the file name without extension
-    new_filename = f"{base}.tux"
-    os.rename(filename, new_filename)
+################################################################################
+# Save/Load Functions
+################################################################################
 
-def load_network(filename: str):
-    '''
-    Load the network from a file
-    '''
-    with open(filename, 'r', encoding='utf-8') as file:
-        data = file.read()
-    return data
+def save_network(network: List[Any], filename: str) -> None:
+    """
+    Save the network to a .iac file using pickle.
+    """
+    filename = os.path.splitext(filename)[0] + ".iac"
+    with open(filename, "wb") as file:
+        pickle.dump(network, file)
+
+
+def load_network(filename: str) -> List[Any]:
+    """
+    Load a network from a .iac file.
+    """
+    with open(filename, "rb") as file:
+        return pickle.load(file)
