@@ -1,396 +1,231 @@
+import numpy as np
 import os
 import pickle
-import numpy as np
-from typing import List, Tuple, Any, Callable, Dict
 import time
+from typing import List, Tuple, Any, Callable, Dict
 
-################################################################################
-# Utility Functions
-################################################################################
+###############################################################################
+# Utility Functions (same as before)
+###############################################################################
 
 def format_time(seconds):
-    days, seconds = divmod(int(seconds), 86400)  # 86400 seconds in a day
-    hours, seconds = divmod(seconds, 3600)       # 3600 seconds in an hour
-    minutes, seconds = divmod(seconds, 60)       # 60 seconds in a minute
+    days, seconds = divmod(int(seconds), 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
     return f"{days}d {hours}h {minutes}m {seconds}s"
 
-def dense(*layers: Tuple[int, int]) -> List[int]:
-    """
-    Generate a list of dense layer sizes from tuples of (num_layers, neurons_per_layer).
-    Example: dense((2,64), (3,32)) -> [64, 64, 32, 32, 32]
-    """
-    return [neurons for num, neurons in layers for _ in range(num)]
-
-def default_activations():
-    """
-    Return the built-in activation functions dictionary.
-    """
-    return {
-        "relu": (lambda x: np.maximum(x, 0),
-                 lambda out: (out > 0).astype(float)),
-        "sigmoid": (lambda x: 1 / (1 + np.exp(-x)),
-                    lambda out: out * (1.0 - out)),
-        "tanh": (np.tanh,
-                 lambda out: 1.0 - out ** 2),
-        "leaky_relu": (lambda x: np.maximum(0.01 * x, x),
-                       lambda out: np.where(out > 0, 1.0, 0.01)),
-        "softmax": (lambda x: np.exp(x) / np.sum(np.exp(x), axis=1, keepdims=True),
-                    # out here is the result of softmax, so derivative wrt out
-                    lambda out: out * (1.0 - out)), 
-        "linear": (lambda x: x,
-                   lambda out: np.ones_like(out)),
-    }
-
-def get_activation_fn(name: str,
-                      custom_activations: Dict[str, Tuple[Callable[[np.ndarray], np.ndarray],
-                                                        Callable[[np.ndarray], np.ndarray]]] = None
-                      ) -> Callable[[np.ndarray], np.ndarray]:
-    """
-    Retrieve the forward activation function based on the provided name.
-    If custom_activations is provided and has an entry matching 'name',
-    use that instead of the default.
-    """
-    # Merge defaults with custom, custom takes precedence
-    all_acts = default_activations()
-    if custom_activations:
-        for k, v in custom_activations.items():
-            all_acts[k] = v
-
-    if name not in all_acts:
-        # If unknown, default to linear as fallback
-        return lambda x: x
-    return all_acts[name][0]
-
-def get_activation_derivative(name: str,
-                              custom_activations: Dict[str, Tuple[Callable[[np.ndarray], np.ndarray],
-                                                                Callable[[np.ndarray], np.ndarray]]] = None
-                              ) -> Callable[[np.ndarray], np.ndarray]:
-    """
-    Retrieve the derivative function of the activation based on the provided name.
-    If custom_activations is provided and has an entry matching 'name',
-    use that derivative instead of the default.
-    """
-    # Merge defaults with custom, custom takes precedence
-    all_acts = default_activations()
-    if custom_activations:
-        for k, v in custom_activations.items():
-            all_acts[k] = v
-
-    if name not in all_acts:
-        # If unknown, default derivative is 1
-        return lambda x: np.ones_like(x)
-    return all_acts[name][1]
-
 def batchnorm(inputs: np.ndarray, use_batchnorm: bool = True, epsilon: float = 1e-5) -> np.ndarray:
-    """
-    Apply batch normalization if enabled.
-    Uses per-batch statistics; for production, you'd typically maintain running
-    averages for inference.
-    """
     if not use_batchnorm:
         return inputs
     batch_mean = np.mean(inputs, axis=0)
     batch_var = np.var(inputs, axis=0)
     return (inputs - batch_mean) / np.sqrt(batch_var + epsilon)
 
-def initialize_weights(shape: Tuple[int, int], method: str = "he") -> np.ndarray:
-    """
-    Initialize weights based on the selected method (He or Xavier).
-    """
+def initialize_weights(shape: Tuple[int, ...], method: str = "he") -> np.ndarray:
     if method == "he":
         return np.random.randn(*shape) * np.sqrt(2.0 / shape[0])
     elif method == "xavier":
         return np.random.randn(*shape) * np.sqrt(1.0 / shape[0])
     return np.random.randn(*shape)
 
-################################################################################
-# Network Creation
-################################################################################
+###############################################################################
+# Activation Functions (with custom support)
+###############################################################################
 
-def make_network(input_size: int,
-                 output_size: int,
-                 layers: List[int],
-                 hidden_activation: str = "relu",
-                 output_activation: str = "linear",
-                 use_batchnorm: bool = False,
-                 weight_init: str = "he",
-                 bias_init: float = 0.0,
-                 dropout_rate: float = 0.0,
-                 custom_activations: Dict[str, Tuple[Callable[[np.ndarray], np.ndarray],
-                                                  Callable[[np.ndarray], np.ndarray]]] = None
-                 ) -> List[Any]:
+def default_activations():
+    return {
+        "relu": (lambda x: np.maximum(x, 0),
+                 lambda out: (out > 0).astype(float)),
+        "sigmoid": (lambda x: 1 / (1 + np.exp(-x)),
+                    lambda out: out * (1 - out)),
+        "tanh": (np.tanh,
+                 lambda out: 1.0 - out**2),
+        "linear": (lambda x: x,
+                   lambda out: np.ones_like(out))
+    }
+
+def get_activation_fn(name: str,
+                      custom_activations: Dict[str, Tuple[Callable, Callable]] = None
+                      ) -> Callable[[np.ndarray], np.ndarray]:
+    all_acts = default_activations()
+    if custom_activations:
+        all_acts.update(custom_activations)
+    return all_acts.get(name, all_acts["linear"])[0]
+
+def get_activation_derivative(name: str,
+                              custom_activations: Dict[str, Tuple[Callable, Callable]] = None
+                              ) -> Callable[[np.ndarray], np.ndarray]:
+    all_acts = default_activations()
+    if custom_activations:
+        all_acts.update(custom_activations)
+    return all_acts.get(name, all_acts["linear"])[1]
+
+###############################################################################
+# Convolution Forward and Backward (naïve implementations)
+###############################################################################
+
+def conv_forward(x: np.ndarray, w: np.ndarray, b: np.ndarray, stride: Tuple[int, int]=(1,1)) -> np.ndarray:
+    # x: (N, H, W, C)
+    # w: (kH, kW, C, F)
+    # b: (F,)
+    N, H, W, C = x.shape
+    kH, kW, _, F = w.shape
+    sH, sW = stride
+    out_H = (H - kH) // sH + 1
+    out_W = (W - kW) // sW + 1
+    out = np.zeros((N, out_H, out_W, F))
+    for n in range(N):
+        for i in range(out_H):
+            for j in range(out_W):
+                window = x[n, i*sH:i*sH+kH, j*sW:j*sW+kW, :]
+                for f in range(F):
+                    out[n, i, j, f] = np.sum(window * w[:, :, :, f]) + b[f]
+    return out
+
+def conv_backward(dout: np.ndarray, x: np.ndarray, w: np.ndarray, stride: Tuple[int, int]=(1,1)) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    # dout: gradient of output, shape (N, out_H, out_W, F)
+    # x: input, shape (N, H, W, C)
+    N, H, W, C = x.shape
+    kH, kW, _, F = w.shape
+    sH, sW = stride
+    out_H = (H - kH) // sH + 1
+    out_W = (W - kW) // sW + 1
+    dx = np.zeros_like(x)
+    dw = np.zeros_like(w)
+    db = np.zeros((F,))
+    for n in range(N):
+        for i in range(out_H):
+            for j in range(out_W):
+                for f in range(F):
+                    window = x[n, i*sH:i*sH+kH, j*sW:j*sW+kW, :]
+                    dw[:, :, :, f] += dout[n, i, j, f] * window
+                    dx[n, i*sH:i*sH+kH, j*sW:j*sW+kW, :] += dout[n, i, j, f] * w[:, :, :, f]
+                    db[f] += dout[n, i, j, f]
+    return dx, dw, db
+
+###############################################################################
+# Network Construction using an Architecture List
+###############################################################################
+
+def make_network_architecture(input_shape: Any,
+                              architecture: List[Dict],
+                              weight_init: str = "he",
+                              bias_init: float = 0.0,
+                              custom_activations: Dict[str, Tuple[Callable, Callable]] = None
+                              ) -> List[Dict]:
     """
-    Create a neural network with specified properties.
-    Returns [
-        weights, 
-        biases, 
-        hidden_activation, 
-        output_activation, 
-        use_batchnorm,
-        dropout_rate,
-        custom_activations
-    ].
+    Build a network as a list of layer dictionaries.
+    
+    For a convolutional layer, specify:
+      {
+         "type": "conv",
+         "filters": <number of filters>,       # e.g., 1 for one output per row
+         "kernel_size": (kH, kW),               # e.g., (1, 19)
+         "stride": (sH, sW),                    # default is (1,1)
+         "activation": "<activation name>",     # e.g., "relu"
+         "batchnorm": <True/False>,             # optional
+         "dropout": <dropout rate>,             # optional
+      }
+      
+    For a dense layer, specify:
+      {
+         "type": "dense",
+         "units": <number of neurons>,
+         "activation": "<activation name>",
+         "batchnorm": <True/False>,             # optional
+         "dropout": <dropout rate>,             # optional
+      }
+      
+    If a dense layer follows a conv layer, the conv output is automatically flattened.
     """
-    # Initialize weights
-    weights = [initialize_weights((input_size, layers[0]), weight_init)]
-    for i in range(len(layers) - 1):
-        weights.append(initialize_weights((layers[i], layers[i + 1]), weight_init))
-    weights.append(initialize_weights((layers[-1], output_size), weight_init))
-
-    # Initialize biases
-    biases = [np.full((1, l), bias_init) for l in layers]
-    biases.append(np.full((1, output_size), bias_init))
-
-    return [
-        weights,
-        biases,
-        hidden_activation,
-        output_activation,
-        use_batchnorm,
-        dropout_rate,
-        custom_activations
-    ]
-
-################################################################################
-# Forward Pass (for quick eval without training)
-################################################################################
-
-def forward(network: List[Any], inputs: np.ndarray, training: bool = False) -> np.ndarray:
-    """
-    Perform a forward pass through the neural network. By default (training=False),
-    dropout is not applied. For quick evaluation or inference, call this directly.
-    """
-    (weights, 
-     biases, 
-     hidden_activation, 
-     output_activation, 
-     use_batchnorm,
-     dropout_rate,
-     custom_activations) = network
-
-    hidden_activation_fn = get_activation_fn(hidden_activation, custom_activations)
-    output_activation_fn = get_activation_fn(output_activation, custom_activations)
-
-    # Forward through hidden layers
-    for i in range(len(weights) - 1):
-        z = np.dot(inputs, weights[i]) + biases[i]
-        a = hidden_activation_fn(z)
-        a = batchnorm(a, use_batchnorm=use_batchnorm)
-        # If training, apply dropout
-        if training and dropout_rate > 0.0:
-            mask = (np.random.rand(*a.shape) < (1.0 - dropout_rate))
-            a *= mask / (1.0 - dropout_rate)
-        inputs = a
-
-    # Forward through output layer
-    z = np.dot(inputs, weights[-1]) + biases[-1]
-    outputs = output_activation_fn(z)
-    return outputs
-
-################################################################################
-# MSE Function (Network + Dataset)
-################################################################################
-
-def mse(network: List[Any], dataset: Tuple[np.ndarray, np.ndarray]) -> float:
-    """
-    Compute Mean Squared Error (MSE) for the given network and dataset.
-    Dataset format: (X, Y), where X is input data and Y is labels/target outputs.
-    """
-    X, Y = dataset
-    preds = forward(network, X, training=False)
-    return np.mean((preds - Y) ** 2)
-
-################################################################################
-# Training Function with Dropout, SGD, Adam, AdamW, BN, L1/L2 Regularization
-################################################################################
-
-def train(network: List[Any],
-          dataset: Tuple[np.ndarray, np.ndarray],
-          optimizer: str = "adamw",
-          lr: float = 0.001,
-          epochs: int = 1000,
-          beta1: float = 0.9,
-          beta2: float = 0.999,
-          epsilon: float = 1e-8,
-          weight_decay: float = 1e-2,
-          l1: float = 0.0,
-          l2: float = 0.0,
-          loss_limit: float = 0.001) -> List[Any]:
-    """
-    Train the neural network using backpropagation with options for:
-      - 'sgd'
-      - 'adam'
-      - 'adamw'
-
-    Also includes:
-      - L1 and L2 regularization
-      - Dropout support
-      - Batchnorm usage if 'use_batchnorm' is True in network
-    """
-    X, Y = dataset
-    (weights, 
-     biases, 
-     hidden_activation, 
-     output_activation, 
-     use_batchnorm,
-     dropout_rate,
-     custom_activations) = network
-
-    hidden_activation_fn = get_activation_fn(hidden_activation, custom_activations)
-    output_activation_fn = get_activation_fn(output_activation, custom_activations)
-    hidden_activation_deriv = get_activation_derivative(hidden_activation, custom_activations)
-    output_activation_deriv = get_activation_derivative(output_activation, custom_activations)
-
-    # For Adam/AdamW, initialize moments for each weight and bias
-    m_w = [np.zeros_like(w) for w in weights]
-    v_w = [np.zeros_like(w) for w in weights]
-    m_b = [np.zeros_like(b) for b in biases]
-    v_b = [np.zeros_like(b) for b in biases]
-
-    # Keep track of best loss for progress arrow
-    old_loss = np.inf
-    init_time = time.time()
-
-    for epoch in range(epochs):
-        ############################################################################
-        # Forward pass (storing all intermediate values for backprop)
-        ############################################################################
-        z_values = []
-        a_values = [X]  # a_values[i] is the output (post-activation) of layer i-1
-        dropout_masks = []  # track dropout for each hidden layer
-
-        # Hidden layers
-        for i in range(len(weights) - 1):
-            z = np.dot(a_values[-1], weights[i]) + biases[i]
-            z_values.append(z)
-            a = hidden_activation_fn(z)
-            a = batchnorm(a, use_batchnorm=use_batchnorm)
-
-            # Apply dropout if needed
-            if dropout_rate > 0.0:
-                mask = (np.random.rand(*a.shape) < (1.0 - dropout_rate))
-                a *= mask / (1.0 - dropout_rate)
-                dropout_masks.append(mask)
+    network = []
+    current_shape = input_shape  # could be a tuple (for conv) or an int (for dense)
+    for layer_spec in architecture:
+        if layer_spec["type"] == "conv":
+            # Expect current_shape as (H, W, C)
+            if not isinstance(current_shape, tuple) or len(current_shape) != 3:
+                raise ValueError("Convolutional layers require an input shape tuple of (H, W, C).")
+            H, W, C = current_shape
+            kH, kW = layer_spec["kernel_size"]
+            stride = layer_spec.get("stride", (1,1))
+            filters = layer_spec["filters"]
+            out_H = (H - kH) // stride[0] + 1
+            out_W = (W - kW) // stride[1] + 1
+            new_shape = (out_H, out_W, filters)
+            weight_shape = (kH, kW, C, filters)
+            weights = initialize_weights(weight_shape, method=weight_init)
+            biases = np.full((filters,), bias_init)
+            layer = {
+                "type": "conv",
+                "weights": weights,
+                "biases": biases,
+                "activation": layer_spec.get("activation", "linear"),
+                "stride": stride,
+                "batchnorm": layer_spec.get("batchnorm", False),
+                "dropout": layer_spec.get("dropout", 0.0),
+                "custom_activations": custom_activations,
+            }
+            network.append(layer)
+            current_shape = new_shape
+        elif layer_spec["type"] == "dense":
+            # Flatten if coming from a conv layer
+            if isinstance(current_shape, tuple):
+                flattened_dim = np.prod(current_shape)
             else:
-                dropout_masks.append(None)
-
-            a_values.append(a)
-
-        # Output layer
-        z_out = np.dot(a_values[-1], weights[-1]) + biases[-1]
-        z_values.append(z_out)
-        y_pred = output_activation_fn(z_out)
-        a_values.append(y_pred)
-
-        ############################################################################
-        # Loss calculation (MSE + regularization penalties)
-        ############################################################################
-        mse_loss = np.mean((y_pred - Y) ** 2)
-        reg_loss = 0.0
-        for w in weights:
-            reg_loss += l1 * np.sum(np.abs(w)) + l2 * np.sum(w ** 2)
-        loss = mse_loss + reg_loss
-
-        ############################################################################
-        # Backward pass
-        ############################################################################
-        dA = (y_pred - Y) / Y.shape[0]  # derivative of MSE wrt predictions
-
-        for i in reversed(range(len(weights))):
-            # Decide which activation derivative to use
-            if i == len(weights) - 1:
-                # Output layer
-                dZ = dA * output_activation_deriv(a_values[i + 1])
-            else:
-                # Hidden layer
-                dZ = dA * hidden_activation_deriv(a_values[i + 1])
-                # For dropout: zero out dropped neurons
-                if dropout_masks[i] is not None:
-                    dZ *= dropout_masks[i] / (1.0 - dropout_rate)
-
-            grad_w = np.dot(a_values[i].T, dZ)
-            grad_b = np.sum(dZ, axis=0, keepdims=True)
-
-            # L1 and L2 regularization terms for weight gradients
-            grad_w += l1 * np.sign(weights[i]) + 2 * l2 * weights[i]
-
-            # Optimizer updates
-            if optimizer in ["adam", "adamw"]:
-                m_w[i] = beta1 * m_w[i] + (1 - beta1) * grad_w
-                v_w[i] = beta2 * v_w[i] + (1 - beta2) * (grad_w ** 2)
-
-                m_b[i] = beta1 * m_b[i] + (1 - beta1) * grad_b
-                v_b[i] = beta2 * v_b[i] + (1 - beta2) * (grad_b ** 2)
-
-                m_w_corr = m_w[i] / (1 - beta1 ** (epoch + 1))
-                v_w_corr = v_w[i] / (1 - beta2 ** (epoch + 1))
-                m_b_corr = m_b[i] / (1 - beta1 ** (epoch + 1))
-                v_b_corr = v_b[i] / (1 - beta2 ** (epoch + 1))
-
-                if optimizer == "adam":
-                    weights[i] -= lr * (m_w_corr / (np.sqrt(v_w_corr) + epsilon))
-                    biases[i] -= lr * (m_b_corr / (np.sqrt(v_b_corr) + epsilon))
-                else:
-                    # AdamW
-                    weights[i] -= (lr * (m_w_corr / (np.sqrt(v_w_corr) + epsilon))
-                                   + lr * weight_decay * weights[i])
-                    biases[i] -= lr * (m_b_corr / (np.sqrt(v_b_corr) + epsilon))
-            else:
-                # Vanilla SGD update
-                weights[i] -= lr * grad_w
-                biases[i] -= lr * grad_b
-
-            if i > 0:
-                dA = np.dot(dZ, weights[i].T)
-
-        ############################################################################
-        # Progress bar & early stopping
-        ############################################################################
-        elapsed = time.time() - init_time
-        if epoch > 0:
-            eta = (elapsed / epoch) * (epochs - epoch)
+                flattened_dim = current_shape
+            units = layer_spec["units"]
+            weight_shape = (flattened_dim, units)
+            weights = initialize_weights(weight_shape, method=weight_init)
+            biases = np.full((units,), bias_init)
+            layer = {
+                "type": "dense",
+                "weights": weights,
+                "biases": biases,
+                "activation": layer_spec.get("activation", "linear"),
+                "batchnorm": layer_spec.get("batchnorm", False),
+                "dropout": layer_spec.get("dropout", 0.0),
+                "custom_activations": custom_activations,
+            }
+            network.append(layer)
+            current_shape = units
         else:
-            eta = 0
-
-        progress = float(epoch + 1) / float(epochs)
-        bar_length = 50
-        block = int(round(bar_length * progress))
-        bar = '#' * block + ' ' * (bar_length - block)
-
-        if loss > old_loss:
-            arrow = '▲'
-        elif loss < old_loss:
-            arrow = '▼'
-        else:
-            arrow = '○'
-
-        print(f"\rEpoch {epoch + 1}/{epochs} [{bar}] - {loss:.6f} Loss {arrow} ETA {format_time(eta)}", end='')
-        
-        old_loss = loss
-
-        if epoch == epochs - 1:
-            print()
-        if loss < loss_limit:
-            print("\nBreaking Ahead of Time\n")
-            break
-
+            raise ValueError(f"Unknown layer type: {layer_spec['type']}")
     return network
 
-################################################################################
-# Save/Load Functions
-################################################################################
+###############################################################################
+# Forward Pass for the New Architecture
+###############################################################################
 
-def save_network(network: List[Any], filename: str) -> None:
+def forward_network(network: List[Dict], inputs: np.ndarray, training: bool = False) -> np.ndarray:
     """
-    Save the network to a .iac file using pickle.
+    Process inputs through all layers in the network.
+    For conv layers, inputs should have shape (N, H, W, C).
+    For dense layers, inputs should be 2D.
     """
-    filename = os.path.splitext(filename)[0] + ".iac"
-    with open(filename, "wb") as file:
-        pickle.dump(network, file)
-
-def load_network(filename: str) -> List[Any]:
-    """
-    Load a network from a .iac file.
-    """
-    with open(filename, "rb") as file:
-        return pickle.load(file)
+    a = inputs
+    for layer in network:
+        if layer["type"] == "conv":
+            a = conv_forward(a, layer["weights"], layer["biases"], layer["stride"])
+            if layer["batchnorm"]:
+                # For conv layers, apply batchnorm on the flattened channels (simplified)
+                N = a.shape[0]
+                a = batchnorm(a.reshape(N, -1)).reshape(a.shape)
+            act_fn = get_activation_fn(layer["activation"], layer.get("custom_activations"))
+            a = act_fn(a)
+            if training and layer["dropout"] > 0.0:
+                mask = (np.random.rand(*a.shape) < (1.0 - layer["dropout"]))
+                a *= mask / (1.0 - layer["dropout"])
+        elif layer["type"] == "dense":
+            if len(a.shape) > 2:
+                a = a.reshape(a.shape[0], -1)
+            a = np.dot(a, layer["weights"]) + layer["biases"]
+            if layer["batchnorm"]:
+                a = batchnorm(a)
+            act_fn = get_activation_fn(layer["activation"], layer.get("custom_activations"))
+            a = act_fn(a)
+            if training and layer["dropout"] > 0.0:
+                mask = (np.random.rand(*a.shape) < (1.0 - layer["dropout"]))
+                a *= mask / (1.0 - layer["dropout"])
+        else:
+            raise ValueError(f"Unknown layer type: {layer['type']}")
+    return a
